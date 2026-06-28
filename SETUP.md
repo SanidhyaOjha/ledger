@@ -23,7 +23,7 @@ node -v
 npm -v
 ```
 
-You should already have a GitHub account (you've used Pages before for CAIC-Calendar).
+You should already have a GitHub account.
 
 ---
 

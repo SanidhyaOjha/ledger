@@ -9,7 +9,7 @@
 // Access only happens when YOU click "Sign in with Google" and approve.
 // ─────────────────────────────────────────────────────────────────────────────
 
-export const GOOGLE_CLIENT_ID = "PASTE_YOUR_CLIENT_ID_HERE.apps.googleusercontent.com";
+export const GOOGLE_CLIENT_ID = "109371719574-lce8onm9ee44kvu5blkbtkrcsv9288rl.apps.googleusercontent.com";
 
 // Minimal scope: the app can ONLY see files it creates itself — never the rest
 // of your Drive. This is the most restrictive Drive scope Google offers.
