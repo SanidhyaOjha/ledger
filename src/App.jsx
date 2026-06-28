@@ -118,7 +118,7 @@ export default function App() {
 
   return (
     <div style={{ ...styles.app, background: t.bg, color: t.text, fontFamily: t.font }}>
-      <style>{`* { box-sizing: border-box; } body { margin:0; } ::-webkit-scrollbar{width:7px;height:7px} ::-webkit-scrollbar-thumb{background:${t.line};border-radius:4px} input,select,button{font-family:inherit}`}</style>
+      <style>{`* { box-sizing: border-box; } html, body, #root { margin:0; padding:0; min-height:100%; background:${t.bg}; } body { overflow-x:hidden; } ::-webkit-scrollbar{width:7px;height:7px} ::-webkit-scrollbar-thumb{background:${t.line};border-radius:4px} input,select,button{font-family:inherit}`}</style>
 
       <div style={{ ...styles.header, borderBottom: `1px solid ${t.line}` }}>
         <div>

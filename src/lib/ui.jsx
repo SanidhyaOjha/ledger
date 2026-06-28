@@ -21,7 +21,7 @@ export const styles = {
   header: { display: "flex", justifyContent: "space-between", alignItems: "flex-start", padding: "20px 18px 16px" },
   iconBtn: { width: 40, height: 40, borderRadius: 12, cursor: "pointer", fontSize: 18 },
   body: { padding: "8px 16px" },
-  fab: { position: "fixed", bottom: 84, right: "calc(50% - 230px + 18px)", width: 56, height: 56, borderRadius: "50%", border: "none", color: "#fff", fontSize: 30, cursor: "pointer", boxShadow: "0 6px 20px rgba(0,0,0,.3)", zIndex: 50 },
+  fab: { position: "fixed", bottom: 84, left: "50%", transform: "translateX(min(212px, 50vw - 34px))", width: 56, height: 56, borderRadius: "50%", border: "none", color: "#fff", fontSize: 30, cursor: "pointer", boxShadow: "0 6px 20px rgba(0,0,0,.3)", zIndex: 50 },
   nav: { position: "fixed", bottom: 0, left: "50%", transform: "translateX(-50%)", width: "100%", maxWidth: 460, display: "flex", paddingBottom: "env(safe-area-inset-bottom)" },
   overlay: { position: "fixed", inset: 0, background: "rgba(0,0,0,.55)", display: "flex", alignItems: "flex-end", justifyContent: "center", zIndex: 100 },
   modal: { width: "100%", maxWidth: 460, borderRadius: "22px 22px 0 0", padding: "22px 20px 30px", maxHeight: "92vh", overflowY: "auto" },
