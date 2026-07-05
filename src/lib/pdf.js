@@ -1,7 +1,7 @@
 // pdf.js — generate a lean PDF statement from a filtered transaction list.
 import { jsPDF } from "jspdf";
 import autoTable from "jspdf-autotable";
-import { fmt, niceDate, received, outstanding } from "./model";
+import { fmt, niceDate, received, outstanding, visibleTags, modeShort } from "./model";
 
 // `scope` is a human label like "Personal · Goa trip · food".
 // `rows` is the already-filtered transaction array.
@@ -26,18 +26,34 @@ export function exportStatement({ scope, rows, totals, lookups }) {
 
   // does any row carry repayment info? if so, show owed/received columns
   const anyRepay = rows.some((x) => x.type === "expense" && x.tags.some((tg) => tagConfig[tg]?.repay) && x.owed > 0);
+  // v2: show a Mode column only if any row has payment info
+  const anyMode = rows.some((x) => x.payments && x.payments.length);
 
-  const head = anyRepay
-    ? [["Date", "Note", "Account", "Group", "Tags", "Amount", "Owed", "Got back", "Outstanding"]]
-    : [["Date", "Note", "Account", "Group", "Tags", "Amount"]];
+  const head = [[
+    "Date", "Note", "Account", "Group", "Tags",
+    ...(anyMode ? ["Mode"] : []),
+    "Amount",
+    ...(anyRepay ? ["Owed", "Got back", "Outstanding"] : []),
+  ]];
+
+  const modeCell = (x) => !x.payments || !x.payments.length ? "—"
+    : x.payments.length === 1 ? modeShort[x.payments[0].mode]
+    : x.payments.map((p) => `${modeShort[p.mode]} ${p.amount < 0 ? "-" : ""}${fmt(p.amount)}`).join("\n");
 
   const body = rows.map((x) => {
+    // combined entries: list items under the note
+    let note = x.note || "—";
+    if (x.receiver) note += `  → ${x.receiver}`;
+    if (Array.isArray(x.items) && x.items.length) {
+      note += "\n" + x.items.map((i) => `  • ${i.note || "(item)"} — ${fmt(i.amount)}`).join("\n");
+    }
     const base = [
       niceDate(x.date),
-      x.note || "—",
+      note,
       acctName(x.account) || "—",
       x.group ? grpName(x.group) || "—" : "—",
-      x.tags.join(", "),
+      visibleTags(x.tags, tagConfig).join(", "), // v2: ghost tags never exported
+      ...(anyMode ? [modeCell(x)] : []),
       (x.type === "income" ? "+" : x.type === "expense" ? "-" : "↔") + fmt(x.type === "expense" ? x.amount - received(x) : x.amount),
     ];
     if (!anyRepay) return base;

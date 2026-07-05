@@ -1,13 +1,15 @@
 import React, { useState, useMemo } from "react";
 import { Modal, Seg, Stat, Toggle, COLORS, pill, inp, sel, lbl, primaryBtn, secondaryBtn, miniBtn } from "../lib/ui.jsx";
-import { fmt, niceDate, uid, received, outstanding, isRepayable, balanceOf } from "../lib/model";
+import { fmt, niceDate, uid, received, outstanding, isRepayable, balanceOf, MODES, modeShort, visibleTags, isGhost } from "../lib/model";
 import { exportStatement } from "../lib/pdf";
 import { receiptUrl } from "../lib/drive";
 
 // ── HOME ──────────────────────────────────────────────────────────────────────
 export function Home({ t, accounts, currentAccount, setCurrentAccount, tx, acct, grp, tagConfig, onEdit, onDelete, onViewInvoice }) {
   const cur = acct(currentAccount);
-  const recent = tx.filter((x) => x.account === currentAccount || x.toAccount === currentAccount).slice(0, 60);
+  const recent = tx.filter((x) => x.account === currentAccount || x.toAccount === currentAccount)
+    .sort((a, b) => b.date.localeCompare(a.date)) // v2: date-wise, recent first
+    .slice(0, 60);
   return (
     <div>
       <div style={{ display: "flex", gap: 8, overflowX: "auto", paddingBottom: 6 }}>
@@ -35,10 +37,19 @@ export function Home({ t, accounts, currentAccount, setCurrentAccount, tx, acct,
   );
 }
 
+// small muted "paid via" line: single mode shows just the word, splits show the
+// breakdown ("credit 3,550 · cash −50"). Absent for v1 rows with no mode set.
+export function ModeLine({ t, payments }) {
+  if (!payments || payments.length === 0) return null;
+  if (payments.length === 1) return <span style={{ fontSize: 11, color: t.dim }}>{modeShort[payments[0].mode]}</span>;
+  return <span style={{ fontSize: 11, color: t.dim }}>{payments.map((p) => `${modeShort[p.mode]} ${p.amount < 0 ? "−" : ""}${fmt(p.amount)}`).join(" · ")}</span>;
+}
+
 function TxRow({ x, t, acct, grp, tagConfig, currentAccount, onEdit, onDelete, onViewInvoice }) {
   const [open, setOpen] = useState(false);
   const repay = isRepayable(x, tagConfig);
   const rec = received(x);
+  const isCombined = Array.isArray(x.items) && x.items.length > 0; // v2
   let headline, sub = null, headColor = t.text, sign = "";
   if (x.type === "income") { sign = "+"; headColor = t.green; headline = fmt(x.amount); }
   else if (x.type === "transfer") {
@@ -55,18 +66,35 @@ function TxRow({ x, t, acct, grp, tagConfig, currentAccount, onEdit, onDelete, o
   let label = x.note || "(no note)";
   if (x.type === "transfer") label = (x.toAccount === currentAccount ? "From " : "To ") + acct(x.toAccount === currentAccount ? x.account : x.toAccount)?.name;
 
+  const actions = (
+    <div style={{ display: "flex", gap: 8, marginTop: 12 }} onClick={(e) => e.stopPropagation()}>
+      <button style={miniBtn(t)} onClick={() => onEdit(x)}>Edit</button>
+      {x.invoice && <button style={miniBtn(t)} onClick={() => onViewInvoice(x.invoice)}>View invoice</button>}
+      {x.proof && <button style={miniBtn(t)} onClick={() => onViewInvoice(x.proof)}>View proof</button>}
+      <button style={{ ...miniBtn(t), color: t.red, borderColor: t.red + "55" }} onClick={() => onDelete(x.id)}>Delete</button>
+    </div>
+  );
+
   return (
     <div style={{ borderBottom: `1px solid ${t.line}`, padding: "12px 8px", borderRadius: 10, cursor: "pointer" }} onClick={() => setOpen(!open)}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
             <span style={{ fontSize: 15, fontWeight: 500 }}>{label}</span>
+            {x.receiver && <span style={{ fontSize: 13, color: t.dim, fontWeight: 300 }}>→ {x.receiver}</span>}
             {x.group && <span style={{ ...pill(t), background: grp(x.group)?.color + "22", color: grp(x.group)?.color }}>{grp(x.group)?.name}</span>}
             {x.invoice && <span title="has invoice" style={{ fontSize: 12, color: t.dim }}>📎</span>}
+            {x.proof && <span title="has payment proof" style={{ fontSize: 12, color: t.dim }}>🧾</span>}
+            {isCombined && (
+              <span style={{ ...pill(t), display: "inline-flex", alignItems: "center", gap: 4 }}>
+                {x.items.length} items <span style={{ fontSize: 10, transform: open ? "rotate(90deg)" : "none", display: "inline-block", transition: "transform .15s" }}>›</span>
+              </span>
+            )}
           </div>
           <div style={{ display: "flex", gap: 6, marginTop: 5, flexWrap: "wrap", alignItems: "center" }}>
             <span style={{ fontSize: 11, color: t.dim }}>{niceDate(x.date)}</span>
-            {x.tags.map((tag) => <span key={tag} style={pill(t)}>{tag}</span>)}
+            {visibleTags(x.tags, tagConfig).map((tag) => <span key={tag} style={pill(t)}>{tag}</span>)}
+            <ModeLine t={t} payments={x.payments} />
           </div>
         </div>
         <div style={{ textAlign: "right", marginLeft: 12 }}>
@@ -74,13 +102,20 @@ function TxRow({ x, t, acct, grp, tagConfig, currentAccount, onEdit, onDelete, o
           {sub && <div style={{ marginTop: 3 }}>{sub}</div>}
         </div>
       </div>
-      {open && (
-        <div style={{ display: "flex", gap: 8, marginTop: 12 }} onClick={(e) => e.stopPropagation()}>
-          <button style={miniBtn(t)} onClick={() => onEdit(x)}>Edit</button>
-          {x.invoice && <button style={miniBtn(t)} onClick={() => onViewInvoice(x.invoice)}>View invoice</button>}
-          <button style={{ ...miniBtn(t), color: t.red, borderColor: t.red + "55" }} onClick={() => onDelete(x.id)}>Delete</button>
+      {isCombined && open && (
+        <div onClick={(e) => e.stopPropagation()}>
+          <div style={{ marginTop: 10, marginLeft: 6, borderLeft: `2px solid ${t.line}`, paddingLeft: 12 }}>
+            {x.items.map((it) => (
+              <div key={it.id} style={{ display: "flex", justifyContent: "space-between", padding: "7px 0", borderBottom: `1px dashed ${t.line}` }}>
+                <span style={{ fontSize: 13.5 }}>{it.note || "(item)"}</span>
+                <span style={{ fontSize: 13.5, color: t.dim }}>−{fmt(it.amount)}</span>
+              </div>
+            ))}
+          </div>
+          {actions}
         </div>
       )}
+      {!isCombined && open && actions}
     </div>
   );
 }
@@ -109,6 +144,7 @@ export function Analyze({ t, tx, acct, grp, accounts, groups, tagConfig }) {
   const [selected, setSelected] = useState([]);
   const [mode, setMode] = useState("AND");
   const [typeFilter, setTypeFilter] = useState("all");
+  const [modeFilter, setModeFilter] = useState("all"); // v2: payment mode filter
   const [fromDate, setFromDate] = useState("");
   const [toDate, setToDate] = useState("");
   const [datePreset, setDatePreset] = useState("all");
@@ -133,23 +169,30 @@ export function Analyze({ t, tx, acct, grp, accounts, groups, tagConfig }) {
     return true;
   }), [tx, acctFilter, groupFilter, fromDate, toDate]);
 
-  const scopeTags = useMemo(() => [...new Set(scopeTx.flatMap((x) => x.tags))].sort(), [scopeTx]);
+  const scopeTags = useMemo(() => [...new Set(scopeTx.flatMap((x) => visibleTags(x.tags, tagConfig)))].sort(), [scopeTx, tagConfig]); // v2: ghosts hidden
   const toggle = (tag) => setSelected((s) => s.includes(tag) ? s.filter((x) => x !== tag) : [...s, tag]);
 
   const filtered = useMemo(() => scopeTx.filter((x) => {
     if (typeFilter !== "all" && x.type !== typeFilter) return false;
+    // v2: payment mode filter — "none" surfaces entries with no mode set (v1 data)
+    if (modeFilter === "none") { if (x.payments && x.payments.length) return false; }
+    else if (modeFilter !== "all") { if (!(x.payments || []).some((p) => p.mode === modeFilter)) return false; }
     if (selected.length === 0) return true;
     return mode === "AND" ? selected.every((tg) => x.tags.includes(tg)) : selected.some((tg) => x.tags.includes(tg));
-  }), [scopeTx, selected, mode, typeFilter]);
+  }), [scopeTx, selected, mode, typeFilter, modeFilter]);
 
   const totals = useMemo(() => {
+    const byMode = modeFilter !== "all" && modeFilter !== "none";
     let income = 0, expense = 0, repaid = 0;
     for (const x of filtered) {
-      if (x.type === "income") income += x.amount;
-      if (x.type === "expense") { expense += x.amount; repaid += received(x); }
+      // v2: when slicing by one mode, split payments contribute only that
+      // mode's share (e.g. ₹3,550 on card + −₹50 cash → card view counts 3,550)
+      const share = byMode ? (x.payments || []).filter((p) => p.mode === modeFilter).reduce((s, p) => s + p.amount, 0) : x.amount;
+      if (x.type === "income") income += share;
+      if (x.type === "expense") { expense += share; if (!byMode) repaid += received(x); }
     }
     return { income, expense, repaid, net: income - expense + repaid, count: filtered.length };
-  }, [filtered]);
+  }, [filtered, modeFilter]);
 
   const scopeLabel = () => {
     const parts = [];
@@ -158,6 +201,8 @@ export function Analyze({ t, tx, acct, grp, accounts, groups, tagConfig }) {
     else if (groupFilter !== "all") parts.push(grp(groupFilter)?.name);
     if (selected.length) parts.push(selected.join(mode === "AND" ? " + " : " / "));
     if (typeFilter !== "all") parts.push(typeFilter);
+    if (modeFilter === "none") parts.push("no payment mode");
+    else if (modeFilter !== "all") parts.push("via " + modeFilter);
     if (fromDate || toDate) parts.push(`${fromDate || "start"} → ${toDate || "now"}`);
     return parts.join(" · ") || "All transactions";
   };
@@ -184,6 +229,11 @@ export function Analyze({ t, tx, acct, grp, accounts, groups, tagConfig }) {
           <option value="income">Income</option>
           <option value="expense">Expense</option>
           <option value="transfer">Transfer</option>
+        </select>
+        <select value={modeFilter} onChange={(e) => setModeFilter(e.target.value)} style={sel(t)}>
+          <option value="all">All payment modes</option>
+          {MODES.map((m) => <option key={m} value={m}>{m[0].toUpperCase() + m.slice(1)}</option>)}
+          <option value="none">— No mode set —</option>
         </select>
       </div>
 
@@ -220,12 +270,13 @@ export function Analyze({ t, tx, acct, grp, accounts, groups, tagConfig }) {
       {filtered.map((x) => (
         <div key={x.id} style={{ borderBottom: `1px solid ${t.line}`, padding: "10px 4px", display: "flex", justifyContent: "space-between" }}>
           <div>
-            <div style={{ fontSize: 14 }}>{x.note || "(no note)"}</div>
+            <div style={{ fontSize: 14 }}>{x.note || "(no note)"}{x.receiver && <span style={{ fontSize: 12, color: t.dim, fontWeight: 300 }}> → {x.receiver}</span>}</div>
             <div style={{ display: "flex", gap: 5, marginTop: 4, flexWrap: "wrap", alignItems: "center" }}>
               <span style={{ fontSize: 10, color: t.dim }}>{niceDate(x.date)}</span>
               <span style={{ ...pill(t), fontSize: 10 }}>{acct(x.account)?.name}</span>
               {x.group && <span style={{ ...pill(t), fontSize: 10 }}>{grp(x.group)?.name}</span>}
-              {x.tags.map((tg) => <span key={tg} style={{ ...pill(t), fontSize: 10 }}>{tg}</span>)}
+              {visibleTags(x.tags, tagConfig).map((tg) => <span key={tg} style={{ ...pill(t), fontSize: 10 }}>{tg}</span>)}
+              <ModeLine t={t} payments={x.payments} />
             </div>
           </div>
           <div style={{ fontWeight: 700, color: x.type === "income" ? t.green : t.text, whiteSpace: "nowrap", marginLeft: 8 }}>
@@ -481,41 +532,15 @@ function BulkTagInput({ t, allTags, onApply }) {
 
 function TagFeatures({ t, allTags, tagConfig, setTagConfig }) {
   const [openFeature, setOpenFeature] = useState(null);
-  const toggleRepay = (tag) => setTagConfig((c) => ({ ...c, [tag]: { ...c[tag], repay: !c[tag]?.repay } }));
-  const toggleInvoice = (tag) => setTagConfig((c) => ({ ...c, [tag]: { ...c[tag], invoice: !c[tag]?.invoice } }));
+  const toggleKey = (tag, key) => setTagConfig((c) => ({ ...c, [tag]: { ...c[tag], [key]: !c[tag]?.[key] } }));
+  // each feature is a boolean key on tagConfig[tag]; features stack freely —
+  // one tag can be ghost + proof + repay all at once.
   const FEATURES = [
-    {
-      id: "repay", name: "Repayment tracking",
-      desc: "Expenses with an enabled tag track owed/received amounts and appear in the Owed tab.",
-      countOn: allTags.filter((tg) => tagConfig[tg]?.repay).length,
-      render: () => (
-        <>
-          {allTags.length === 0 && <div style={{ color: t.dim, fontSize: 14 }}>No tags yet — add some transactions first.</div>}
-          {allTags.map((tag) => (
-            <div key={tag} style={{ borderBottom: `1px solid ${t.line}`, padding: "12px 4px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-              <span style={{ fontSize: 15 }}>{tag}</span>
-              <Toggle t={t} on={!!tagConfig[tag]?.repay} onClick={() => toggleRepay(tag)} />
-            </div>
-          ))}
-        </>
-      ),
-    },
-    {
-      id: "invoice", name: "Invoice attachment",
-      desc: "Transactions with an enabled tag get an option to attach a receipt/invoice image, stored in your Drive.",
-      countOn: allTags.filter((tg) => tagConfig[tg]?.invoice).length,
-      render: () => (
-        <>
-          {allTags.length === 0 && <div style={{ color: t.dim, fontSize: 14 }}>No tags yet — add some transactions first.</div>}
-          {allTags.map((tag) => (
-            <div key={tag} style={{ borderBottom: `1px solid ${t.line}`, padding: "12px 4px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-              <span style={{ fontSize: 15 }}>{tag}</span>
-              <Toggle t={t} on={!!tagConfig[tag]?.invoice} onClick={() => toggleInvoice(tag)} />
-            </div>
-          ))}
-        </>
-      ),
-    },
+    { id: "repay", name: "Repayment tracking", desc: "Expenses with an enabled tag track owed/received amounts and appear in the Owed tab. For combined multi-item entries, owed applies to the entry total." },
+    { id: "invoice", name: "Invoice attachment", desc: "Transactions with an enabled tag get an option to attach a receipt/invoice image, stored in your Drive." },
+    { id: "proof", name: "Payment proof tracking", desc: "Same mechanics as invoices: transactions with an enabled tag get an option to attach a payment-proof image, stored in your Drive. A transaction can carry both an invoice and a proof." },
+    { id: "receiver", name: "Receiver tagging", desc: "Transactions with an enabled tag get a Receiver field (who the money was for). Shown in light grey next to the note." },
+    { id: "ghost", name: "Ghost tags", desc: "Ghost tags stay on transactions and keep powering any other features enabled on them, but the tag itself is hidden on Home, in Analyze (including the slice cloud), and in PDF exports. You'll only see it in the add/edit form." },
   ];
   if (openFeature) {
     const f = FEATURES.find((x) => x.id === openFeature);
@@ -525,19 +550,34 @@ function TagFeatures({ t, allTags, tagConfig, setTagConfig }) {
         <div style={{ fontSize: 17, fontWeight: 700, marginBottom: 4 }}>{f.name}</div>
         <div style={{ fontSize: 13, color: t.dim, marginBottom: 16, lineHeight: 1.5 }}>{f.desc}</div>
         <div style={{ fontSize: 12, letterSpacing: 1, color: t.dim, marginBottom: 4 }}>ENABLE PER TAG</div>
-        {f.render()}
+        {allTags.length === 0 && <div style={{ color: t.dim, fontSize: 14 }}>No tags yet — add some transactions first.</div>}
+        {allTags.map((tag) => (
+          <div key={tag} style={{ borderBottom: `1px solid ${t.line}`, padding: "12px 4px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+              <span style={{ fontSize: 15 }}>{tag}</span>
+              {/* show the tag's other enabled features so combos are visible */}
+              {Object.entries(tagConfig[tag] || {}).filter(([k, v]) => v && k !== f.id).map(([k]) => (
+                <span key={k} style={{ ...pill(t), fontSize: 10 }}>{k}</span>
+              ))}
+            </div>
+            <Toggle t={t} on={!!tagConfig[tag]?.[f.id]} onClick={() => toggleKey(tag, f.id)} />
+          </div>
+        ))}
       </div>
     );
   }
   return (
     <div>
-      <div style={{ fontSize: 13, color: t.dim, marginBottom: 16, lineHeight: 1.5 }}>Special features you can switch on for individual tags. Pick one to choose which tags use it.</div>
-      {FEATURES.map((f) => (
-        <button key={f.id} onClick={() => setOpenFeature(f.id)} style={{ width: "100%", textAlign: "left", borderBottom: `1px solid ${t.line}`, padding: "14px 4px", background: "transparent", border: "none", borderBottomStyle: "solid", cursor: "pointer", color: t.text, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-          <div><div style={{ fontSize: 15, fontWeight: 500 }}>{f.name}</div><div style={{ fontSize: 12, color: t.dim, marginTop: 3 }}>{f.countOn} tag{f.countOn !== 1 ? "s" : ""} enabled</div></div>
-          <span style={{ color: t.dim, fontSize: 18 }}>›</span>
-        </button>
-      ))}
+      <div style={{ fontSize: 13, color: t.dim, marginBottom: 16, lineHeight: 1.5 }}>Special features you can switch on for individual tags. Features stack — one tag can have several enabled (e.g. ghost + payment proof).</div>
+      {FEATURES.map((f) => {
+        const countOn = allTags.filter((tg) => tagConfig[tg]?.[f.id]).length;
+        return (
+          <button key={f.id} onClick={() => setOpenFeature(f.id)} style={{ width: "100%", textAlign: "left", borderBottom: `1px solid ${t.line}`, padding: "14px 4px", background: "transparent", border: "none", borderBottomStyle: "solid", cursor: "pointer", color: t.text, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <div><div style={{ fontSize: 15, fontWeight: 500 }}>{f.name}</div><div style={{ fontSize: 12, color: t.dim, marginTop: 3 }}>{countOn} tag{countOn !== 1 ? "s" : ""} enabled</div></div>
+            <span style={{ color: t.dim, fontSize: 18 }}>›</span>
+          </button>
+        );
+      })}
     </div>
   );
 }

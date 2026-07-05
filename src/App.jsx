@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import { theme, styles, primaryBtn, secondaryBtn } from "./lib/ui.jsx";
-import { emptyState, uid, todayISO } from "./lib/model";
+import { emptyState, uid, todayISO, migrateLedger } from "./lib/model";
 import { GOOGLE_CLIENT_ID } from "./lib/config";
 import * as drive from "./lib/drive";
 import PinGate from "./components/PinGate.jsx";
@@ -21,6 +21,7 @@ export default function App() {
 
   // data
   const [data, setData] = useState(null); // { accounts, groups, tagConfig, tx }
+  const [driveEmail, setDriveEmail] = useState(null);
   const [currentAccount, setCurrentAccount] = useState(null);
   const [view, setView] = useState("home");
   const [editing, setEditing] = useState(null);
@@ -31,11 +32,21 @@ export default function App() {
   // shared post-auth load (used by both explicit and silent sign-in)
   const afterAuth = useCallback(async () => {
     setSignedIn(true);
+    setDriveEmail(drive.getDriveEmail());
     let loaded = await drive.loadLedger();
     if (!loaded) { loaded = emptyState(); await drive.saveLedger(loaded); }
-    loaded.groups ||= []; loaded.tagConfig ||= {}; loaded.accounts ||= []; loaded.tx ||= [];
-    setData(loaded);
-    setCurrentAccount(loaded.accounts[0]?.id || null);
+    // v2 migration: normalizes containers and bumps version — never rewrites
+    // transactions (all new fields are optional). If this is v1 data, write a
+    // one-time safety copy (ledger-data-backup-v1.json) to Drive BEFORE the
+    // migrated version is ever saved. If the backup fails, we keep running on
+    // the migrated data in memory but never persist the version bump.
+    const { data: migrated, fromV1 } = migrateLedger(loaded);
+    if (fromV1) {
+      try { await drive.backupLedgerV1(loaded); await drive.saveLedger(migrated); }
+      catch { /* backup failed → don't persist yet; next open retries */ }
+    }
+    setData(migrated);
+    setCurrentAccount(migrated.accounts[0]?.id || null);
   }, []);
 
   // ── sign in + load ──────────────────────────────────────────────────────────
@@ -157,7 +168,7 @@ export default function App() {
         {view === "home" && <Home t={t} accounts={data.accounts} currentAccount={currentAccount} setCurrentAccount={setCurrentAccount} tx={data.tx} acct={acct} grp={grp} tagConfig={data.tagConfig} onEdit={(x) => { setEditing(x); setShowForm(true); }} onDelete={deleteTx} onViewInvoice={setViewingInvoice} />}
         {view === "analyze" && <Analyze t={t} tx={data.tx} acct={acct} grp={grp} accounts={data.accounts} groups={data.groups} tagConfig={data.tagConfig} />}
         {view === "owed" && <Owed t={t} tx={data.tx} acct={acct} tagConfig={data.tagConfig} onAddRepayment={addRepayment} onRemoveRepayment={removeRepayment} onEdit={(x) => { setEditing(x); setShowForm(true); }} />}
-        {view === "settings" && <Settings t={t} accounts={data.accounts} setAccounts={setAccounts} groups={data.groups} setGroups={setGroups} tx={data.tx} setTx={setTx} allTags={allTags} tagConfig={data.tagConfig} setTagConfig={setTagConfig} currentAccount={currentAccount} setCurrentAccount={setCurrentAccount} onAddToGroup={openAdd} onSignOut={signOut} />}
+        {view === "settings" && <Settings t={t} accounts={data.accounts} setAccounts={setAccounts} groups={data.groups} setGroups={setGroups} tx={data.tx} setTx={setTx} allTags={allTags} tagConfig={data.tagConfig} setTagConfig={setTagConfig} currentAccount={currentAccount} setCurrentAccount={setCurrentAccount} onAddToGroup={openAdd} onSignOut={signOut} driveEmail={driveEmail} />}
       </div>
 
       {showForm && <TxForm t={t} accounts={data.accounts} groups={data.groups} allTags={allTags} tagConfig={data.tagConfig} initial={editing} defaultAccount={currentAccount} defaultGroup={formGroup} onSave={saveTx} onClose={() => { setShowForm(false); setEditing(null); setFormGroup(null); }} />}

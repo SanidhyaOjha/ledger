@@ -6,15 +6,19 @@
 // this code never sees your password. The access token it receives is kept only
 // in memory for the session.
 //
-// What this module does:
-//   • signIn()            → prompt Google sign-in, get an access token
-//   • loadLedger()        → find/read ledger-data.json from your Drive
-//   • saveLedger(data)    → write ledger-data.json back (debounced by caller)
-//   • uploadReceipt(blob) → put an image in LedgerReceipts/, return its file id
-//   • receiptUrl(id)      → a URL the <img> can load (auth'd fetch → object URL)
+// v2 change — silent relogin with multiple Google accounts:
+//   The old flow used prompt:"none" with no account hint, so when a device has
+//   several Google accounts, Google couldn't tell which one to use and the
+//   silent grant failed — dropping you to the button, which used
+//   prompt:"consent" and forced the account chooser EVERY time.
+//   Now: after a successful sign-in we fetch your account email (userinfo
+//   scope) and keep it in localStorage as a login hint. Every request — silent
+//   or explicit — passes that hint, so Google knows exactly which account and
+//   never needs to ask. Explicit sign-in uses prompt:"" (only prompts when
+//   Google genuinely needs it, e.g. the very first consent).
 // ─────────────────────────────────────────────────────────────────────────────
 
-import { GOOGLE_CLIENT_ID, DRIVE_SCOPE, LEDGER_FILENAME, RECEIPTS_FOLDER } from "./config";
+import { GOOGLE_CLIENT_ID, AUTH_SCOPES, LEDGER_FILENAME, RECEIPTS_FOLDER, BACKUP_FILENAME } from "./config";
 
 let accessToken = null;
 let tokenClient = null;
@@ -22,9 +26,12 @@ let ledgerFileId = null;     // cached id of ledger-data.json once found/created
 let receiptsFolderId = null; // cached id of the receipts folder
 
 // We never store the access token on disk (that would be a security risk). We
-// only store a harmless boolean: "this user has linked Drive before", so on app
-// open we know to ATTEMPT a silent, no-popup token refresh.
+// only store: a harmless boolean ("this user has linked Drive before") and the
+// account email used purely as a login hint for silent re-auth.
 const CONNECTED_FLAG = "ledger_drive_connected";
+const HINT_KEY = "ledger_drive_hint";
+
+export function getDriveEmail() { return localStorage.getItem(HINT_KEY) || null; }
 
 // Load the GIS script once.
 function loadGis() {
@@ -39,43 +46,64 @@ function loadGis() {
   });
 }
 
+// After getting a token, remember which account it belongs to (login hint).
+// Failure here is non-fatal — the app works, silent relogin just stays flaky
+// until a fetch succeeds.
+async function rememberAccountEmail() {
+  try {
+    const res = await fetch("https://www.googleapis.com/oauth2/v3/userinfo", {
+      headers: { Authorization: `Bearer ${accessToken}` },
+    });
+    if (!res.ok) return;
+    const { email } = await res.json();
+    if (email) localStorage.setItem(HINT_KEY, email);
+  } catch { /* ignore */ }
+}
+
 export async function signIn() {
   await loadGis();
   return new Promise((resolve, reject) => {
+    const hint = getDriveEmail();
     tokenClient = window.google.accounts.oauth2.initTokenClient({
       client_id: GOOGLE_CLIENT_ID,
-      scope: DRIVE_SCOPE,
-      callback: (resp) => {
+      scope: AUTH_SCOPES,
+      ...(hint ? { hint } : {}),
+      callback: async (resp) => {
         if (resp.error) return reject(new Error(resp.error));
         accessToken = resp.access_token;
         localStorage.setItem(CONNECTED_FLAG, "1"); // remember the user has linked Drive
+        await rememberAccountEmail();              // remember WHICH account, for next time
         resolve(accessToken);
       },
     });
-    tokenClient.requestAccessToken({ prompt: "consent" }); // explicit click → may show consent
+    // prompt:"" → Google only shows UI when it must (first consent, revoked
+    // access). With a hint present, repeat sign-ins skip the account chooser.
+    tokenClient.requestAccessToken({ prompt: "" });
   });
 }
 
 // Attempt a SILENT token grant — no popup, no consent screen. Works only if the
-// user has already granted access in a prior session. Used on app open so you
-// don't click "Sign in" every time. Resolves null if Google needs interaction
-// (in which case we fall back to showing the button).
+// user has already granted access in a prior session. The stored email hint is
+// what lets this succeed on devices with multiple Google accounts.
 export function trySilentSignIn() {
   if (localStorage.getItem(CONNECTED_FLAG) !== "1") return Promise.resolve(null);
   return loadGis().then(() => new Promise((resolve) => {
     let settled = false;
     const done = (v) => { if (!settled) { settled = true; resolve(v); } };
+    const hint = getDriveEmail();
     tokenClient = window.google.accounts.oauth2.initTokenClient({
       client_id: GOOGLE_CLIENT_ID,
-      scope: DRIVE_SCOPE,
+      scope: AUTH_SCOPES,
+      ...(hint ? { hint } : {}),
       callback: (resp) => {
         if (resp.error || !resp.access_token) return done(null);
         accessToken = resp.access_token;
+        if (!hint) rememberAccountEmail(); // backfill hint for pre-v2 sessions
         done(accessToken);
       },
       error_callback: () => done(null), // e.g. consent needed, popup blocked
     });
-    try { tokenClient.requestAccessToken({ prompt: "none" }); } catch { done(null); }
+    try { tokenClient.requestAccessToken({ prompt: "none", ...(hint ? { hint } : {}) }); } catch { done(null); }
     setTimeout(() => done(null), 4000); // safety: don't hang the app on open
   }));
 }
@@ -86,6 +114,7 @@ export function signOut() {
   }
   accessToken = null; ledgerFileId = null; receiptsFolderId = null;
   localStorage.removeItem(CONNECTED_FLAG); // explicit logout → require button next time
+  localStorage.removeItem(HINT_KEY);       // and forget the account hint
 }
 
 export function isSignedIn() { return !!accessToken; }
@@ -101,13 +130,34 @@ async function api(path, opts = {}) {
   return res;
 }
 
+// ── generic JSON file helpers ─────────────────────────────────────────────────
+async function findFileIdByName(name) {
+  const q = encodeURIComponent(`name='${name}' and trashed=false`);
+  const res = await api(`drive/v3/files?q=${q}&spaces=drive&fields=files(id,name)`);
+  const { files } = await res.json();
+  return files.length ? files[0].id : null;
+}
+
+async function createJsonFile(name, body) {
+  const boundary = "ledger" + Math.random().toString(36).slice(2);
+  const metadata = { name, mimeType: "application/json" };
+  const multipart =
+    `--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n` +
+    `${JSON.stringify(metadata)}\r\n` +
+    `--${boundary}\r\nContent-Type: application/json\r\n\r\n` +
+    `${body}\r\n--${boundary}--`;
+  const res = await api(`upload/drive/v3/files?uploadType=multipart&fields=id`, {
+    method: "POST",
+    headers: { "Content-Type": `multipart/related; boundary=${boundary}` },
+    body: multipart,
+  });
+  return (await res.json()).id;
+}
+
 // ── ledger file ───────────────────────────────────────────────────────────────
 async function findLedgerFileId() {
   if (ledgerFileId) return ledgerFileId;
-  const q = encodeURIComponent(`name='${LEDGER_FILENAME}' and trashed=false`);
-  const res = await api(`drive/v3/files?q=${q}&spaces=drive&fields=files(id,name)`);
-  const { files } = await res.json();
-  if (files.length) ledgerFileId = files[0].id;
+  ledgerFileId = await findFileIdByName(LEDGER_FILENAME);
   return ledgerFileId;
 }
 
@@ -122,32 +172,27 @@ export async function saveLedger(data) {
   const body = JSON.stringify(data);
   const id = await findLedgerFileId();
   if (id) {
-    // update existing
     await api(`upload/drive/v3/files/${id}?uploadType=media`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body,
     });
   } else {
-    // create new with multipart (metadata + content)
-    const boundary = "ledger" + Math.random().toString(36).slice(2);
-    const metadata = { name: LEDGER_FILENAME, mimeType: "application/json" };
-    const multipart =
-      `--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n` +
-      `${JSON.stringify(metadata)}\r\n` +
-      `--${boundary}\r\nContent-Type: application/json\r\n\r\n` +
-      `${body}\r\n--${boundary}--`;
-    const res = await api(`upload/drive/v3/files?uploadType=multipart&fields=id`, {
-      method: "POST",
-      headers: { "Content-Type": `multipart/related; boundary=${boundary}` },
-      body: multipart,
-    });
-    ledgerFileId = (await res.json()).id;
+    ledgerFileId = await createJsonFile(LEDGER_FILENAME, body);
   }
   return true;
 }
 
-// ── receipts ──────────────────────────────────────────────────────────────────
+// One-time v1 safety copy. Never overwrites: if the backup already exists in
+// your Drive, this is a no-op. Returns true when a backup exists (old or new).
+export async function backupLedgerV1(data) {
+  const existing = await findFileIdByName(BACKUP_FILENAME);
+  if (existing) return true;
+  await createJsonFile(BACKUP_FILENAME, JSON.stringify(data));
+  return true;
+}
+
+// ── receipts (used for both invoices and payment proofs) ─────────────────────
 async function getReceiptsFolderId() {
   if (receiptsFolderId) return receiptsFolderId;
   const q = encodeURIComponent(`name='${RECEIPTS_FOLDER}' and mimeType='application/vnd.google-apps.folder' and trashed=false`);
@@ -168,7 +213,6 @@ export async function uploadReceipt(blob, filename) {
   const folderId = await getReceiptsFolderId();
   const boundary = "rcpt" + Math.random().toString(36).slice(2);
   const metadata = { name: filename || `receipt-${Date.now()}.jpg`, parents: [folderId] };
-  // build multipart body with a binary part
   const meta = `--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${JSON.stringify(metadata)}\r\n`;
   const head = `--${boundary}\r\nContent-Type: ${blob.type || "image/jpeg"}\r\n\r\n`;
   const tail = `\r\n--${boundary}--`;
