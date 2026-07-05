@@ -181,7 +181,7 @@ export default function TxForm({ t, accounts, groups, allTags, tagConfig, initia
                   <select value={p.mode} onChange={(e) => setPayments(payments.map((x) => x.id === p.id ? { ...x, mode: e.target.value } : x))} style={{ ...sel(t), flex: 1, textTransform: "capitalize" }}>
                     {MODES.map((m) => <option key={m} value={m}>{m}</option>)}
                   </select>
-                  <input type="number" inputMode="decimal" value={p.amount} onChange={(e) => setPayments(payments.map((x) => x.id === p.id ? { ...x, amount: e.target.value } : x))}
+                  <input type="text" inputMode="text" value={p.amount} onChange={(e) => { const v = e.target.value; if (v === "" || /^-?\d*\.?\d*$/.test(v)) setPayments(payments.map((x) => x.id === p.id ? { ...x, amount: v } : x)); }}
                     placeholder="0 (− allowed)" style={{ ...inp(t), width: 118, flex: "none" }} />
                   <button style={{ ...miniBtn(t), color: t.red, borderColor: t.red + "55", padding: "6px 10px" }} onClick={() => setPayments(payments.filter((x) => x.id !== p.id))}>×</button>
                 </div>
