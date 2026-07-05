@@ -9,7 +9,8 @@
 // Access only happens when YOU click "Sign in with Google" and approve.
 // ─────────────────────────────────────────────────────────────────────────────
 
-export const GOOGLE_CLIENT_ID = "109371719574-lce8onm9ee44kvu5blkbtkrcsv9288rl.apps.googleusercontent.com";
+export const GOOGLE_CLIENT_ID =
+  "644679919884-9fqid9u6e4r2mdf41vnl523kfckhud47.apps.googleusercontent.com";
 
 // Minimal scope: the app can ONLY see files it creates itself — never the rest
 // of your Drive. This is the most restrictive Drive scope Google offers.
@@ -17,7 +18,8 @@ export const GOOGLE_CLIENT_ID = "109371719574-lce8onm9ee44kvu5blkbtkrcsv9288rl.a
 // that stored email is what makes silent relogin work when your device has
 // multiple Google accounts (it's passed as a login hint, nothing more).
 export const DRIVE_SCOPE = "https://www.googleapis.com/auth/drive.file";
-export const AUTH_SCOPES = DRIVE_SCOPE + " https://www.googleapis.com/auth/userinfo.email";
+export const AUTH_SCOPES =
+  DRIVE_SCOPE + " https://www.googleapis.com/auth/userinfo.email";
 
 // One-time safety copy of your v1 data, written before the first v2 save.
 export const BACKUP_FILENAME = "ledger-data-backup-v1.json";
