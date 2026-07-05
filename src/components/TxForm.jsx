@@ -122,7 +122,7 @@ export default function TxForm({ t, accounts, groups, allTags, tagConfig, initia
           {items.map((i) => (
             <div key={i.id} style={{ display: "flex", gap: 8, marginBottom: 8 }}>
               <input value={i.note} onChange={(e) => setItems(items.map((x) => x.id === i.id ? { ...x, note: e.target.value } : x))} placeholder="e.g. Auto ride" style={{ ...inp(t), flex: 1 }} />
-              <input type="number" inputMode="decimal" value={i.amount} onChange={(e) => setItems(items.map((x) => x.id === i.id ? { ...x, amount: e.target.value } : x))} placeholder="0" style={{ ...inp(t), width: 100, flex: "none" }} />
+              <input type="text" inputMode="text" value={i.amount} onChange={(e) => { const v = e.target.value; if (v === "" || /^-?\d*\.?\d*$/.test(v)) setItems(items.map((x) => x.id === i.id ? { ...x, amount: v } : x)); }} placeholder="0" style={{ ...inp(t), width: 100, flex: "none" }} />
               {items.length > 1 && <button style={{ ...miniBtn(t), color: t.red, borderColor: t.red + "55", padding: "6px 10px" }} onClick={() => setItems(items.filter((x) => x.id !== i.id))}>×</button>}
             </div>
           ))}
