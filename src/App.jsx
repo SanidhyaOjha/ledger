@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import { theme, styles, primaryBtn, secondaryBtn } from "./lib/ui.jsx";
-import { emptyState, uid, todayISO, migrateLedger } from "./lib/model";
+import { emptyState, uid, todayISO, migrateLedger, EXTERNAL_ACCOUNT } from "./lib/model";
 import { GOOGLE_CLIENT_ID } from "./lib/config";
 import * as drive from "./lib/drive";
 import PinGate from "./components/PinGate.jsx";
@@ -110,6 +110,15 @@ export default function App() {
   const addRepayment = (id, amount) => setTx((prev) => prev.map((p) => p.id === id ? { ...p, repayments: [...(p.repayments || []), { id: uid(), amount, date: todayISO() }] } : p));
   const removeRepayment = (txId, rId) => setTx((prev) => prev.map((p) => p.id === txId ? { ...p, repayments: p.repayments.filter((r) => r.id !== rId) } : p));
 
+  // old lends: logged straight from the Owed tab, no account/tag setup needed
+  // — see EXTERNAL_ACCOUNT in lib/model.js for why this never touches balances.
+  const addOldLend = ({ note, amount, date, receivedSoFar }) => setTx((prev) => [{
+    id: uid(), type: "expense", amount, account: EXTERNAL_ACCOUNT, toAccount: undefined,
+    group: null, note, tags: [], date: date || todayISO(), owed: amount, invoice: null,
+    repayments: receivedSoFar > 0 ? [{ id: uid(), amount: receivedSoFar, date: todayISO() }] : [],
+    payments: null, items: null, receiver: null, proof: null, source: "manual",
+  }, ...prev]);
+
   const signOut = () => { drive.signOut(); setSignedIn(false); setData(null); };
   const openAdd = (group = null) => { setEditing(null); setFormGroup(group); setShowForm(true); };
 
@@ -167,7 +176,7 @@ export default function App() {
       <div style={styles.body}>
         {view === "home" && <Home t={t} accounts={data.accounts} currentAccount={currentAccount} setCurrentAccount={setCurrentAccount} tx={data.tx} acct={acct} grp={grp} tagConfig={data.tagConfig} onEdit={(x) => { setEditing(x); setShowForm(true); }} onDelete={deleteTx} onViewInvoice={setViewingInvoice} />}
         {view === "analyze" && <Analyze t={t} tx={data.tx} acct={acct} grp={grp} accounts={data.accounts} groups={data.groups} tagConfig={data.tagConfig} />}
-        {view === "owed" && <Owed t={t} tx={data.tx} acct={acct} tagConfig={data.tagConfig} onAddRepayment={addRepayment} onRemoveRepayment={removeRepayment} onEdit={(x) => { setEditing(x); setShowForm(true); }} />}
+        {view === "owed" && <Owed t={t} tx={data.tx} acct={acct} tagConfig={data.tagConfig} netWorth={netWorth} onAddRepayment={addRepayment} onRemoveRepayment={removeRepayment} onAddOldLend={addOldLend} onDelete={deleteTx} onEdit={(x) => { setEditing(x); setShowForm(true); }} />}
         {view === "settings" && <Settings t={t} accounts={data.accounts} setAccounts={setAccounts} groups={data.groups} setGroups={setGroups} tx={data.tx} setTx={setTx} allTags={allTags} tagConfig={data.tagConfig} setTagConfig={setTagConfig} currentAccount={currentAccount} setCurrentAccount={setCurrentAccount} onAddToGroup={openAdd} onSignOut={signOut} driveEmail={driveEmail} />}
       </div>
 

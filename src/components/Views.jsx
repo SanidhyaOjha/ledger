@@ -1,6 +1,6 @@
 import React, { useState, useMemo } from "react";
 import { Modal, Seg, Stat, Toggle, COLORS, pill, inp, sel, lbl, primaryBtn, secondaryBtn, miniBtn } from "../lib/ui.jsx";
-import { fmt, niceDate, uid, received, outstanding, isRepayable, balanceOf, MODES, modeShort, visibleTags, isGhost } from "../lib/model";
+import { fmt, niceDate, uid, todayISO, received, outstanding, isRepayable, isOldLend, balanceOf, MODES, modeShort, visibleTags, isGhost } from "../lib/model";
 import { exportStatement } from "../lib/pdf";
 import { receiptUrl } from "../lib/drive";
 
@@ -289,24 +289,37 @@ export function Analyze({ t, tx, acct, grp, accounts, groups, tagConfig }) {
 }
 
 // ── OWED ──────────────────────────────────────────────────────────────────────
-export function Owed({ t, tx, acct, tagConfig, onAddRepayment, onRemoveRepayment, onEdit }) {
+export function Owed({ t, tx, acct, tagConfig, netWorth, onAddRepayment, onRemoveRepayment, onAddOldLend, onDelete, onEdit }) {
   const repayable = tx.filter((x) => isRepayable(x, tagConfig) && x.owed > 0);
   const pending = repayable.filter((x) => outstanding(x) > 0);
   const done = repayable.filter((x) => outstanding(x) === 0);
   const totalOwed = pending.reduce((s, x) => s + outstanding(x), 0);
   const [logging, setLogging] = useState(null);
+  const [addingLend, setAddingLend] = useState(false);
+
+  const accountName = (x) => isOldLend(x) ? "old lend" : acct(x.account)?.name;
 
   return (
     <div>
-      <Stat t={t} label="Outstanding (still owed to you)" value={fmt(totalOwed)} color={t.amber} big />
+      <div style={{ display: "flex", gap: 10, alignItems: "stretch" }}>
+        <div style={{ flex: 1 }}><Stat t={t} label="Outstanding (still owed to you)" value={fmt(totalOwed)} color={t.amber} big /></div>
+      </div>
+      {netWorth != null && (
+        <div style={{ marginTop: 10 }}>
+          <Stat t={t} label="Estimated net worth (balances + owed to you)" value={(netWorth + totalOwed) < 0 ? "−" + fmt(netWorth + totalOwed) : fmt(netWorth + totalOwed)} color={t.text} />
+        </div>
+      )}
+      <button style={{ ...miniBtn(t), marginTop: 12 }} onClick={() => setAddingLend(true)}>+ add old lend</button>
+      {addingLend && <OldLendForm t={t} onCancel={() => setAddingLend(false)} onSubmit={(v) => { onAddOldLend(v); setAddingLend(false); }} />}
+
       <div style={{ fontSize: 12, letterSpacing: 1, color: t.dim, margin: "18px 2px 8px" }}>PENDING</div>
       {pending.length === 0 && <div style={{ color: t.dim, fontSize: 14, padding: 12 }}>Nothing outstanding. Nice.</div>}
       {pending.map((x) => (
         <div key={x.id} style={{ borderBottom: `1px solid ${t.line}`, padding: "12px 4px" }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
             <div style={{ flex: 1 }}>
-              <div style={{ fontSize: 15 }} onClick={() => onEdit(x)}>{x.note}</div>
-              <div style={{ fontSize: 12, color: t.dim, marginTop: 3 }}>{niceDate(x.date)} · {acct(x.account)?.name} · paid {fmt(x.amount)}, owed {fmt(x.owed)}</div>
+              <div style={{ fontSize: 15, cursor: isOldLend(x) ? "default" : "pointer" }} onClick={() => !isOldLend(x) && onEdit(x)}>{x.note}</div>
+              <div style={{ fontSize: 12, color: t.dim, marginTop: 3 }}>{niceDate(x.date)} · {accountName(x)} · paid {fmt(x.amount)}, owed {fmt(x.owed)}</div>
               {received(x) > 0 && (
                 <div style={{ fontSize: 12, color: t.dim, marginTop: 4 }}>got back: {x.repayments.map((r) => (
                   <span key={r.id} style={{ ...pill(t), marginRight: 4, fontSize: 11 }}>{fmt(r.amount)} <span style={{ cursor: "pointer", color: t.red }} onClick={() => onRemoveRepayment(x.id, r.id)}>×</span></span>
@@ -324,6 +337,7 @@ export function Owed({ t, tx, acct, tagConfig, onAddRepayment, onRemoveRepayment
               <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
                 <button style={miniBtn(t)} onClick={() => setLogging(x.id)}>+ record repayment</button>
                 <button style={{ ...miniBtn(t), color: t.green, borderColor: t.green + "55" }} onClick={() => onAddRepayment(x.id, outstanding(x))}>✓ paid in full</button>
+                {isOldLend(x) && <button style={{ ...miniBtn(t), color: t.red, borderColor: t.red + "55" }} onClick={() => onDelete(x.id)}>remove</button>}
               </div>
             )}
         </div>
@@ -335,11 +349,45 @@ export function Owed({ t, tx, acct, tagConfig, onAddRepayment, onRemoveRepayment
         <div key={x.id} style={{ borderBottom: `1px solid ${t.line}`, padding: "10px 4px", display: "flex", justifyContent: "space-between", opacity: 0.7 }}>
           <div>
             <div style={{ fontSize: 14 }}>{x.note}</div>
-            <div style={{ fontSize: 12, color: t.dim, marginTop: 3 }}>{niceDate(x.date)} · {acct(x.account)?.name}</div>
+            <div style={{ fontSize: 12, color: t.dim, marginTop: 3 }}>{niceDate(x.date)} · {accountName(x)}</div>
           </div>
-          <span style={{ color: t.green, fontWeight: 600 }}>{fmt(x.owed)} ✓</span>
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <span style={{ color: t.green, fontWeight: 600 }}>{fmt(x.owed)} ✓</span>
+            {isOldLend(x) && <span style={{ cursor: "pointer", color: t.dim, fontSize: 13 }} onClick={() => onDelete(x.id)}>×</span>}
+          </div>
         </div>
       ))}
+    </div>
+  );
+}
+
+// Logs money lent before you started using the app. Deliberately separate from
+// the full TxForm: no account/tags to pick, since this never touches a real
+// account balance (see EXTERNAL_ACCOUNT in lib/model.js).
+function OldLendForm({ t, onCancel, onSubmit }) {
+  const [note, setNote] = useState("");
+  const [amount, setAmount] = useState("");
+  const [date, setDate] = useState(todayISO());
+  const [receivedSoFar, setReceivedSoFar] = useState("");
+
+  const amt = parseFloat(amount) || 0;
+  const got = Math.min(parseFloat(receivedSoFar) || 0, amt);
+  const canSubmit = amt > 0;
+
+  return (
+    <div style={{ margin: "12px 0 4px", padding: 14, borderRadius: 14, background: t.card, border: `1px solid ${t.line}` }}>
+      <label style={lbl(t)}>Who'd you lend to / what for</label>
+      <input autoFocus value={note} onChange={(e) => setNote(e.target.value)} placeholder="e.g. Rohan — rent split, March" style={{ ...inp(t), marginBottom: 10 }} />
+      <label style={lbl(t)}>Amount lent</label>
+      <input type="number" inputMode="decimal" value={amount} onChange={(e) => setAmount(e.target.value)} placeholder="0" style={{ ...inp(t), marginBottom: 10 }} />
+      <label style={lbl(t)}>Date lent</label>
+      <input type="date" value={date} onChange={(e) => setDate(e.target.value)} style={{ ...inp(t), marginBottom: 10 }} />
+      <label style={lbl(t)}>Already got back <span style={{ color: t.dim }}>(optional)</span></label>
+      <input type="number" inputMode="decimal" value={receivedSoFar} onChange={(e) => setReceivedSoFar(e.target.value)} placeholder="0" style={{ ...inp(t), marginBottom: 12 }} />
+      <div style={{ display: "flex", gap: 8 }}>
+        <button style={{ ...primaryBtn(t), flex: 1, opacity: canSubmit ? 1 : 0.5 }} disabled={!canSubmit} onClick={() => onSubmit({ note: note.trim() || "Old lend", amount: amt, date, receivedSoFar: got })}>Add</button>
+        <button style={secondaryBtn(t)} onClick={onCancel}>Cancel</button>
+      </div>
     </div>
   );
 }

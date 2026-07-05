@@ -19,7 +19,16 @@ export const visibleTags = (tags, tagConfig) => (tags || []).filter((tg) => !isG
 
 export const received = (x) => (x.repayments || []).reduce((s, r) => s + r.amount, 0);
 export const outstanding = (x) => Math.max(0, (x.owed || 0) - received(x));
-export const isRepayable = (x, tagConfig) => x.type === "expense" && x.tags.some((tg) => tagConfig[tg]?.repay);
+
+// Old lends: money you lent before you started using the app, logged directly
+// from the Owed tab (no tag setup needed). Uses a fake account id that never
+// matches a real account, so it's excluded from balanceOf/net worth — the
+// money already left your real account in the past, outside this app's ledger.
+export const EXTERNAL_ACCOUNT = "__old_lend__";
+export const isOldLend = (x) => x.account === EXTERNAL_ACCOUNT;
+
+export const isRepayable = (x, tagConfig) =>
+  x.type === "expense" && (isOldLend(x) || x.tags.some((tg) => tagConfig[tg]?.repay));
 
 // balances: combined entries need no special handling — x.amount is always the
 // entry total (the sum of its items), so the math below is untouched from v1.
